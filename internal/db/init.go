@@ -1,61 +1,41 @@
+// Package db opens the SQLite database and provides measurement operations.
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"log"
 
 	_ "modernc.org/sqlite"
-
-	utils "github.com/moohalem/WeightTracker/internal/utils"
 )
 
-func Init() error {
-	dbName := "app.db"
-	exists, err := utils.FileExist(dbName)
+func Open(ctx context.Context, path string) (*sql.DB, error) {
+	database, err := sql.Open("sqlite", path)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("open database: %w", err)
 	}
-	if !exists {
-		fmt.Println("DB does not exist, creating one ...")
-		if err := createDB(dbName); err != nil {
-			return err
-		}
-		createTable(dbName)
-		utils.ClearScreen()
-		fmt.Println("Database created")
+
+	if err := database.PingContext(ctx); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	return nil
+
+	if err := createSchema(ctx, database); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("create database schema: %w", err)
+	}
+
+	return database, nil
 }
 
-func createDB(dbName string) error {
-	db, err := sql.Open("sqlite", dbName)
-	if err != nil {
-		return err
-	}
-	defer db.Close()
-
-	if err := db.Ping(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func createTable(dbName string) {
-	db, err := sql.Open("sqlite", dbName)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer db.Close()
-
-	_, err = db.Exec(`
+func createSchema(ctx context.Context, database *sql.DB) error {
+	_, err := database.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS users(
 			id INTEGER PRIMARY KEY,
 			name TEXT NOT NULL,
-			age INTEGER NOT NULL
+			weight REAL NOT NULL,
+			measuringTime DATE NOT NULL
 		)
 	`)
-	if err != nil {
-		log.Fatal(err)
-	}
+	return err
 }

@@ -1,20 +1,25 @@
 package main
 
 import (
+	"context"
 	"log"
+	"os"
+	"time"
 
 	db "github.com/moohalem/WeightTracker/internal/db"
 )
 
 func main() {
-	if err := db.Init(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	database, err := db.Open(ctx, "app.db")
+	if err != nil {
 		log.Fatal(err)
 	}
-	// var name string
-	// var weight float64
-	// fmt.Println("Welcome to the Weight Tracker")
-	// fmt.Println("Enter your name: ")
-	// fmt.Scanln(&name)
-	// fmt.Printf("Hi %s, enter your weight: ", name)
-	// fmt.Scanln(&weight)
+	defer database.Close()
+
+	if err := MainMenu(database, os.Stdin, os.Stdout); err != nil {
+		log.Printf("menu error: %v", err)
+	}
 }
