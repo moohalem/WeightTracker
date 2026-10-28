@@ -102,6 +102,7 @@ func addMeasurement(scanner *bufio.Scanner, output io.Writer, database *sql.DB) 
 }
 
 func viewMeasurementsByName(scanner *bufio.Scanner, output io.Writer, database *sql.DB) error {
+	fmt.Fprint(output, "\033[2J\033[H")
 	names, err := db.Names(database)
 	if err != nil {
 		return err
@@ -111,30 +112,40 @@ func viewMeasurementsByName(scanner *bufio.Scanner, output io.Writer, database *
 		return nil
 	}
 
-	fmt.Fprintln(output, "\nChoose a name:")
-	for index, name := range names {
-		fmt.Fprintf(output, "%d. %s\n", index+1, name)
-	}
-	choiceText, err := readLine(scanner, output, "Name number: ")
-	if err != nil {
-		return err
-	}
-	choice, err := strconv.Atoi(choiceText)
-	if err != nil || choice < 1 || choice > len(names) {
-		fmt.Fprintln(output, "Please choose a number from the list.")
+	for {
+		fmt.Fprint(output, "\033[2J\033[H")
+		fmt.Fprintln(output, "\nChoose a name:")
+		for index, name := range names {
+			fmt.Fprintf(output, "%d. %s\n", index+1, name)
+		}
+		fmt.Fprintln(output, "\n0. Back to main menu")
+
+		choiceText, err := readLine(scanner, output, "\nName number: ")
+		if err != nil {
+			return err
+		}
+		choice, err := strconv.Atoi(choiceText)
+		if err != nil || choice < 0 || choice > len(names) {
+			fmt.Fprint(output, "\033[2J\033[H")
+			fmt.Fprintln(output, "\nPlease choose a number from the list.")
+			time.Sleep(time.Second)
+			continue
+		}
+		if choice == 0 {
+			return nil
+		}
+
+		name := names[choice-1]
+		measurements, err := db.MeasurementsByName(database, name)
+		if err != nil {
+			return err
+		}
+		renderMeasurements(output, "MEASUREMENTS FOR "+name, measurements)
+		if err := pauseForMenu(scanner, output); err != nil {
+			return err
+		}
 		return nil
 	}
-
-	name := names[choice-1]
-	measurements, err := db.MeasurementsByName(database, name)
-	if err != nil {
-		return err
-	}
-	renderMeasurements(output, "MEASUREMENTS FOR "+name, measurements)
-	if err := pauseForMenu(scanner, output); err != nil {
-		return err
-	}
-	return nil
 }
 
 func renderMeasurements(output io.Writer, title string, measurements []db.Measurement) {
