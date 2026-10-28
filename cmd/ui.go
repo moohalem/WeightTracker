@@ -1,3 +1,4 @@
+// Package main starts the WeightTracker command-line application.
 package main
 
 import (
@@ -8,10 +9,22 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	db "github.com/moohalem/WeightTracker/internal/db"
+)
+
+const (
+	reset       = "\033[0m"
+	bold        = "\033[1m"
+	dim         = "\033[2m"
+	red         = "\033[91m"
+	green       = "\033[92m"
+	yellow      = "\033[93m"
+	cyan        = "\033[96m"
+	white       = "\033[97m"
+	bannerWidth = 44
 )
 
 func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
@@ -19,13 +32,13 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 
 	for {
 		fmt.Fprint(output, "\033[2J\033[H")
-		fmt.Fprintln(output, "\nWEIGHT TRACKER")
-		fmt.Fprintln(output, "==============")
-		fmt.Fprintln(output, "1. Add measurement")
-		fmt.Fprintln(output, "2. View latest 10 measurements")
-		fmt.Fprintln(output, "3. View measurements by name")
-		fmt.Fprintln(output, "0. Exit")
-		fmt.Fprint(output, "Choose an option: ")
+		printBanner(output)
+		printSeparator(output)
+		printMenuItem(output, "1", "Add measurement")
+		printMenuItem(output, "2", "View latest 10 measurements")
+		printMenuItem(output, "3", "View measurements by name")
+		printMenuItem(output, "0", "Exit")
+		fmt.Fprintf(output, "\n  %s▸%s Choose an option: ", cyan, reset)
 
 		if !scanner.Scan() {
 			return scanner.Err()
@@ -33,7 +46,7 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 
 		choice, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
 		if err != nil {
-			fmt.Fprintln(output, "Please enter 1, 2, or 0.")
+			fmt.Fprintf(output, "  %s✗ Please enter 1, 2, 3, or 0.%s\n", red, reset)
 			continue
 		}
 
@@ -43,12 +56,12 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 				if errors.Is(err, io.EOF) {
 					return nil
 				}
-				fmt.Fprintf(output, "Could not save measurement: %v\n", err)
+				fmt.Fprintf(output, "  %s✗ Could not save measurement: %v%s\n", red, err, reset)
 			}
 		case 2:
 			measurements, err := db.RecentMeasurements(database)
 			if err != nil {
-				fmt.Fprintf(output, "Could not load measurements: %v\n", err)
+				fmt.Fprintf(output, "  %s✗ Could not load measurements: %v%s\n", red, err, reset)
 			} else {
 				renderMeasurements(output, "LATEST 10 MEASUREMENTS", measurements)
 				if err := pauseForMenu(scanner, output); err != nil {
@@ -63,24 +76,38 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 				if errors.Is(err, io.EOF) {
 					return nil
 				}
-				fmt.Fprintf(output, "Could not load measurements: %v\n", err)
+				fmt.Fprintf(output, "  %s✗ Could not load measurements: %v%s\n", red, err, reset)
 			}
 		case 0:
-			fmt.Fprintln(output, "Goodbye.")
+			fmt.Fprintf(output, "  %s✓ Goodbye.%s\n", green, reset)
 			return nil
 		default:
-			fmt.Fprintln(output, "Please enter 1, 2, 3, or 0.")
+			fmt.Fprintf(output, "  %s✗ Please enter 1, 2, 3, or 0.%s\n", red, reset)
 		}
 	}
 }
 
 func addMeasurement(scanner *bufio.Scanner, output io.Writer, database *sql.DB) error {
-	name, err := readLine(scanner, output, "Name: ")
+	names, err := db.Names(database)
+	if err != nil {
+		return err
+	}
+
+	var name string
+	if len(names) == 0 {
+		name, err = readLine(scanner, output, "Name: ")
+	} else {
+		var canceled bool
+		name, canceled, err = chooseMeasurementName(scanner, output, names)
+		if canceled {
+			return nil
+		}
+	}
 	if err != nil {
 		return err
 	}
 	if name == "" {
-		fmt.Fprintln(output, "Name cannot be empty.")
+		fmt.Fprintf(output, "  %s✗ Name cannot be empty.%s\n", red, reset)
 		return nil
 	}
 
@@ -90,15 +117,46 @@ func addMeasurement(scanner *bufio.Scanner, output io.Writer, database *sql.DB) 
 	}
 	weight, err := strconv.ParseFloat(weightText, 64)
 	if err != nil || weight <= 0 {
-		fmt.Fprintln(output, "Enter a valid weight greater than zero.")
+		fmt.Fprintf(output, "  %s✗ Enter a valid weight greater than zero.%s\n", red, reset)
 		return nil
 	}
 
 	if err := db.AddData(database, name, weight); err != nil {
 		return err
 	}
-	fmt.Fprintln(output, "Measurement saved.")
+	fmt.Fprintf(output, "  %s✓ Measurement saved.%s\n", green, reset)
 	return nil
+}
+
+func chooseMeasurementName(scanner *bufio.Scanner, output io.Writer, names []string) (string, bool, error) {
+	for {
+		fmt.Fprint(output, "\033[2J\033[H")
+		fmt.Fprintf(output, "\n  %sChoose an existing name or enter a new one:%s\n", bold+white, reset)
+		for index, name := range names {
+			fmt.Fprintf(output, "  %s[%s%d%s]%s  %s\n", dim, reset+bold+cyan, index+1, reset+dim, reset, name)
+		}
+		fmt.Fprintf(output, "  %s[a]%s  Add a new name\n", cyan, reset)
+		fmt.Fprintf(output, "  %s[c]%s  Cancel\n", cyan, reset)
+
+		choiceText, err := readLine(scanner, output, "Name option: ")
+		if err != nil {
+			return "", false, err
+		}
+		switch strings.ToLower(choiceText) {
+		case "a":
+			name, err := readLine(scanner, output, "Name: ")
+			return name, false, err
+		case "c":
+			return "", true, nil
+		}
+
+		choice, err := strconv.Atoi(choiceText)
+		if err != nil || choice < 1 || choice > len(names) {
+			fmt.Fprintf(output, "  %s✗ Please choose a number from the list.%s\n", red, reset)
+			continue
+		}
+		return names[choice-1], false, nil
+	}
 }
 
 func viewMeasurementsByName(scanner *bufio.Scanner, output io.Writer, database *sql.DB) error {
@@ -108,26 +166,26 @@ func viewMeasurementsByName(scanner *bufio.Scanner, output io.Writer, database *
 		return err
 	}
 	if len(names) == 0 {
-		fmt.Fprintln(output, "No names found. Add a measurement first.")
+		fmt.Fprintf(output, "  %sℹ No names found. Add a measurement first.%s\n", cyan, reset)
 		return nil
 	}
 
 	for {
 		fmt.Fprint(output, "\033[2J\033[H")
-		fmt.Fprintln(output, "\nChoose a name:")
+		fmt.Fprintf(output, "\n  %sChoose a name:%s\n", bold+white, reset)
 		for index, name := range names {
-			fmt.Fprintf(output, "%d. %s\n", index+1, name)
+			fmt.Fprintf(output, "  %s[%s%d%s]%s  %s\n", dim, reset+bold+cyan, index+1, reset+dim, reset, name)
 		}
-		fmt.Fprintln(output, "\n0. Back to main menu")
+		fmt.Fprintf(output, "  %s[0]%s  Back to main menu\n", cyan, reset)
 
-		choiceText, err := readLine(scanner, output, "\nName number: ")
+		choiceText, err := readLine(scanner, output, "Name number: ")
 		if err != nil {
 			return err
 		}
 		choice, err := strconv.Atoi(choiceText)
 		if err != nil || choice < 0 || choice > len(names) {
 			fmt.Fprint(output, "\033[2J\033[H")
-			fmt.Fprintln(output, "\nPlease choose a number from the list.")
+			fmt.Fprintf(output, "  %s✗ Please choose a number from the list.%s\n", red, reset)
 			time.Sleep(time.Second)
 			continue
 		}
@@ -150,30 +208,96 @@ func viewMeasurementsByName(scanner *bufio.Scanner, output io.Writer, database *
 
 func renderMeasurements(output io.Writer, title string, measurements []db.Measurement) {
 	fmt.Fprint(output, "\033[2J\033[H")
-	fmt.Fprintln(output, "WEIGHT TRACKER")
-	fmt.Fprintln(output, strings.Repeat("=", 72))
-	fmt.Fprintln(output, title)
-	fmt.Fprintln(output)
+	printBanner(output)
+	printSeparator(output)
+	fmt.Fprintf(output, "  %s%s%s\n\n", bold+white, title, reset)
 
 	if len(measurements) == 0 {
-		fmt.Fprintln(output, "No measurements found.")
+		fmt.Fprintf(output, "  %sℹ No measurements found.%s\n", cyan, reset)
 		return
 	}
 
-	table := tabwriter.NewWriter(output, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(table, "ID\tNAME\tWEIGHT\tMEASURED AT")
-	fmt.Fprintln(table, "--\t----\t------\t------------")
+	rows := make([][]string, 0, len(measurements)+1)
+	rows = append(rows, []string{"ID", "NAME", "WEIGHT", "MEASURED AT"})
 	for _, measurement := range measurements {
-		fmt.Fprintf(
-			table,
-			"%d\t%s\t%.2f kg\t%s\n",
-			measurement.ID,
+		rows = append(rows, []string{
+			strconv.FormatInt(measurement.ID, 10),
 			measurement.Name,
-			measurement.Weight,
+			fmt.Sprintf("%.2f kg", measurement.Weight),
 			formatMeasurementTime(measurement.MeasuringTime),
-		)
+		})
 	}
-	table.Flush()
+	widths := make([]int, len(rows[0]))
+	for _, row := range rows {
+		for column, value := range row {
+			if width := utf8.RuneCountInString(value); width > widths[column] {
+				widths[column] = width
+			}
+		}
+	}
+	printTableBorder(output, widths, "┌", "┬", "┐")
+	for rowIndex, row := range rows {
+		fmt.Fprint(output, "  "+dim+"│"+reset)
+		for column, value := range row {
+			style := ""
+			if rowIndex == 0 {
+				style = bold + white
+			} else if column == 0 {
+				style = yellow
+			} else if column == 2 {
+				style = green
+			}
+			if column == 0 || column == 2 {
+				fmt.Fprintf(output, " %s%s%s %s", style, padLeft(value, widths[column]), reset, dim+"│"+reset)
+			} else {
+				fmt.Fprintf(output, " %s%s%s %s", style, padRight(value, widths[column]), reset, dim+"│"+reset)
+			}
+		}
+		fmt.Fprintln(output)
+		if rowIndex == 0 {
+			printTableBorder(output, widths, "├", "┼", "┤")
+		}
+	}
+	printTableBorder(output, widths, "└", "┴", "┘")
+}
+
+func printBanner(output io.Writer) {
+	const title = "W E I G H T   T R A C K E R"
+	fmt.Fprintln(output)
+	fmt.Fprintf(output, "  %s╔%s╗%s\n", bold+cyan, strings.Repeat("═", bannerWidth), reset)
+	padding := (bannerWidth - utf8.RuneCountInString(title)) / 2
+	rightPadding := bannerWidth - padding - utf8.RuneCountInString(title)
+	fmt.Fprintf(output, "  %s║%s%s%s%s%s║%s\n",
+		bold+cyan, reset, strings.Repeat(" ", padding), bold+yellow+title+reset+bold+cyan,
+		strings.Repeat(" ", rightPadding), bold+cyan, reset)
+	fmt.Fprintf(output, "  %s╚%s╝%s\n\n", bold+cyan, strings.Repeat("═", bannerWidth), reset)
+}
+
+func printSeparator(output io.Writer) {
+	fmt.Fprintf(output, "  %s%s%s\n\n", dim, strings.Repeat("─", bannerWidth+2), reset)
+}
+
+func printMenuItem(output io.Writer, key, label string) {
+	fmt.Fprintf(output, "  %s[%s%s%s]%s  %s\n", dim, reset+bold+cyan, key, reset+dim, reset, label)
+}
+
+func printTableBorder(output io.Writer, widths []int, left, middle, right string) {
+	fmt.Fprintf(output, "  %s%s", dim, left)
+	for column, width := range widths {
+		fmt.Fprint(output, strings.Repeat("─", width+2))
+		if column < len(widths)-1 {
+			fmt.Fprint(output, middle)
+		}
+	}
+	fmt.Fprintf(output, "%s%s\n", right, reset)
+}
+
+func padLeft(value string, width int) string {
+	return strings.Repeat(" ", width-utf8.RuneCountInString(value)) + value
+}
+
+func padRight(value string, width int) string {
+	return value + strings.Repeat(" ", width-utf8.RuneCountInString(value))
 }
 
 func formatMeasurementTime(value string) string {
@@ -193,7 +317,7 @@ func pauseForMenu(scanner *bufio.Scanner, output io.Writer) error {
 }
 
 func readLine(scanner *bufio.Scanner, output io.Writer, prompt string) (string, error) {
-	fmt.Fprint(output, prompt)
+	fmt.Fprintf(output, "  %s▸%s %s", cyan, reset, prompt)
 	if !scanner.Scan() {
 		return "", scannerError(scanner)
 	}

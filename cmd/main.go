@@ -1,3 +1,4 @@
+// Package main starts the WeightTracker command-line application.
 package main
 
 import (

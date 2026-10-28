@@ -1,3 +1,4 @@
+// Package db opens the SQLite database and provides measurement operations.
 package db
 
 import (
