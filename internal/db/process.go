@@ -2,68 +2,94 @@ package db
 
 import (
 	"database/sql"
-	"fmt"
 	"time"
 )
 
-func AddData(db *sql.DB, userName string, userWeight float64) error {
-	measuringTime := time.Now()
-	_, err := db.Exec(
+type Measurement struct {
+	ID            int64
+	Name          string
+	Weight        float64
+	MeasuringTime string
+}
+
+func AddData(database *sql.DB, userName string, userWeight float64) error {
+	measuringTime := time.Now().Format(time.RFC3339)
+	_, err := database.Exec(
 		`
 		INSERT INTO users (name, weight, measuringTime)
 		VALUES (?, ?, ?)`,
 		userName,
 		userWeight,
-		measuringTime.Format(time.RFC3339),
+		measuringTime,
 	)
-	if err != nil {
-		return err
-	}
-	fmt.Printf(
-		"Measurement saved! Name: %s, Weight: %.2f kg, Time: %s\n",
-		userName,
-		userWeight,
-		measuringTime.Format(time.RFC3339),
-	)
-	return nil
+	return err
 }
 
-func SelectData(db *sql.DB) error {
-	rows, err := db.Query(`
+func RecentMeasurements(database *sql.DB) ([]Measurement, error) {
+	return queryMeasurements(database, `
 		SELECT id, name, weight, measuringTime
-     	FROM users
-		ORDER BY measuringTime DESC
+		FROM users
+		ORDER BY measuringTime DESC, id DESC
+		LIMIT 10
+	`)
+}
+
+func MeasurementsByName(database *sql.DB, name string) ([]Measurement, error) {
+	return queryMeasurements(database, `
+		SELECT id, name, weight, measuringTime
+		FROM users
+		WHERE name = ?
+		ORDER BY measuringTime DESC, id DESC
+	`, name)
+}
+
+func Names(database *sql.DB) ([]string, error) {
+	rows, err := database.Query(`
+		SELECT DISTINCT name
+		FROM users
+		ORDER BY name COLLATE NOCASE
 	`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
 
-	found := false
+	var names []string
 	for rows.Next() {
-		found = true
-		var id int64
 		var name string
-		var weight float64
-		var measuringTime string
-
-		err := rows.Scan(&id, &name, &weight, &measuringTime)
-		if err != nil {
-			return err
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
 		}
-
-		fmt.Printf(
-			"ID: %d | Name: %s | Weight: %.2f kg | Time: %s\n",
-			id, name, weight, measuringTime,
-		)
+		names = append(names, name)
 	}
-
-	if !found {
-		fmt.Println("No measurements found.")
-	}
-
 	if err := rows.Err(); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return names, nil
+}
+
+func queryMeasurements(database *sql.DB, query string, args ...any) ([]Measurement, error) {
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var measurements []Measurement
+	for rows.Next() {
+		var measurement Measurement
+		if err := rows.Scan(
+			&measurement.ID,
+			&measurement.Name,
+			&measurement.Weight,
+			&measurement.MeasuringTime,
+		); err != nil {
+			return nil, err
+		}
+		measurements = append(measurements, measurement)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return measurements, nil
 }
