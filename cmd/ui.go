@@ -37,8 +37,8 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 		printMenuItem(output, "1", "Add measurement")
 		printMenuItem(output, "2", "View latest 10 measurements")
 		printMenuItem(output, "3", "View measurements by name")
-		printMenuItem(output, "m", "Manage measurements")
-		printMenuItem(output, "0", "Exit")
+		printMenuItem(output, "m", "[M]anage measurements")
+		printMenuItem(output, "e", "[E]xit")
 		fmt.Fprintf(output, "\n  %s▸%s Choose an option: ", cyan, reset)
 
 		if !scanner.Scan() {
@@ -81,7 +81,7 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 				}
 				fmt.Fprintf(output, "  %s✗ Could not manage measurements: %v%s\n", red, err, reset)
 			}
-		case "0":
+		case "e":
 			fmt.Fprintf(output, "  %s✓ Goodbye.%s\n", green, reset)
 			return nil
 		default:
@@ -257,7 +257,7 @@ func updateMeasurement(scanner *bufio.Scanner, output io.Writer, database *sql.D
 		return showManagementNotice(scanner, output, "No measurements found for "+name+".")
 	}
 
-	measurement, canceled, err := selectManagementMeasurement(scanner, output, measurements)
+	measurement, canceled, err := selectManagementMeasurement(scanner, output, measurements, yellow)
 	if err != nil || canceled {
 		return err
 	}
@@ -314,7 +314,7 @@ func deleteMeasurement(scanner *bufio.Scanner, output io.Writer, database *sql.D
 	if len(measurements) == 0 {
 		return showManagementNotice(scanner, output, "No measurements found for "+name+".")
 	}
-	measurement, canceled, err := selectManagementMeasurement(scanner, output, measurements)
+	measurement, canceled, err := selectManagementMeasurement(scanner, output, measurements, green)
 	if err != nil || canceled {
 		return err
 	}
@@ -364,12 +364,12 @@ func selectManagementName(scanner *bufio.Scanner, output io.Writer, database *sq
 	}
 }
 
-func selectManagementMeasurement(scanner *bufio.Scanner, output io.Writer, measurements []db.Measurement) (db.Measurement, bool, error) {
+func selectManagementMeasurement(scanner *bufio.Scanner, output io.Writer, measurements []db.Measurement, optionColor string) (db.Measurement, bool, error) {
 	fmt.Fprint(output, "\033[2J\033[H")
 	fmt.Fprintf(output, "\n  %sCHOOSE A MEASUREMENT%s\n", bold+white, reset)
 	for index, measurement := range measurements {
-		fmt.Fprintf(output, "  %s[%s%d%s]%s  %.2f kg  %s\n",
-			dim, reset+bold+cyan, index+1, reset+dim, reset,
+		fmt.Fprintf(output, "  %s[%d]%s  %.2f kg  %s\n",
+			optionColor, index+1, reset,
 			measurement.Weight, formatMeasurementTime(measurement.MeasuringTime))
 	}
 	fmt.Fprintf(output, "  %s[c]%s  Cancel\n", cyan, reset)
@@ -393,8 +393,8 @@ func selectManagementMeasurement(scanner *bufio.Scanner, output io.Writer, measu
 func chooseDeleteScope(scanner *bufio.Scanner, output io.Writer, name string) (bool, bool, error) {
 	fmt.Fprint(output, "\033[2J\033[H")
 	fmt.Fprintf(output, "\n  %sDELETE MEASUREMENTS FOR %s%s\n", bold+white, name, reset)
-	fmt.Fprintf(output, "  %s[a]%s  Delete all measurements for this name\n", cyan, reset)
-	fmt.Fprintf(output, "  %s[m]%s  Delete one measurement\n", cyan, reset)
+	fmt.Fprintf(output, "  %s[a]%s  Delete [a]ll measurements for this name\n", red, reset)
+	fmt.Fprintf(output, "  %s[s]%s  Delete [s]ingle measurement\n", red, reset)
 	fmt.Fprintf(output, "  %s[c]%s  Cancel\n", cyan, reset)
 	for {
 		choice, err := readLine(scanner, output, "Choose an option: ")
@@ -404,12 +404,12 @@ func chooseDeleteScope(scanner *bufio.Scanner, output io.Writer, name string) (b
 		switch strings.ToLower(choice) {
 		case "a":
 			return true, false, nil
-		case "m":
+		case "s":
 			return false, false, nil
 		case "c":
 			return false, true, nil
 		default:
-			fmt.Fprintf(output, "  %s✗ Choose a, m, or c.%s\n", red, reset)
+			fmt.Fprintf(output, "  %s✗ Choose a, s, or c.%s\n", red, reset)
 		}
 	}
 }

@@ -3,6 +3,7 @@ package db
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -52,8 +53,18 @@ func UpdateMeasurementWeight(database *sql.DB, id int64, weight float64) error {
 }
 
 func DeleteMeasurement(database *sql.DB, id int64) error {
-	_, err := database.Exec("DELETE FROM users WHERE id = ?", id)
-	return err
+	result, err := database.Exec("DELETE FROM users WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	deleted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if deleted == 0 {
+		return fmt.Errorf("measurement %d was not found", id)
+	}
+	return nil
 }
 
 func DeleteMeasurementsByName(database *sql.DB, name string) error {
