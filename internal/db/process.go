@@ -3,7 +3,9 @@ package db
 
 import (
 	"database/sql"
+	"strings"
 	"time"
+	"unicode"
 )
 
 type Measurement struct {
@@ -19,7 +21,7 @@ func AddData(database *sql.DB, userName string, userWeight float64) error {
 		`
 		INSERT INTO users (name, weight, measuringTime)
 		VALUES (?, ?, ?)`,
-		userName,
+		normalizeName(userName),
 		userWeight,
 		measuringTime,
 	)
@@ -39,16 +41,31 @@ func MeasurementsByName(database *sql.DB, name string) ([]Measurement, error) {
 	return queryMeasurements(database, `
 		SELECT id, name, weight, measuringTime
 		FROM users
-		WHERE name = ?
+		WHERE lower(name) = ?
 		ORDER BY measuringTime DESC, id DESC
-	`, name)
+	`, normalizeName(name))
+}
+
+func UpdateMeasurementWeight(database *sql.DB, id int64, weight float64) error {
+	_, err := database.Exec("UPDATE users SET weight = ? WHERE id = ?", weight, id)
+	return err
+}
+
+func DeleteMeasurement(database *sql.DB, id int64) error {
+	_, err := database.Exec("DELETE FROM users WHERE id = ?", id)
+	return err
+}
+
+func DeleteMeasurementsByName(database *sql.DB, name string) error {
+	_, err := database.Exec("DELETE FROM users WHERE lower(name) = ?", normalizeName(name))
+	return err
 }
 
 func Names(database *sql.DB) ([]string, error) {
 	rows, err := database.Query(`
-		SELECT DISTINCT name
+		SELECT DISTINCT lower(name)
 		FROM users
-		ORDER BY name COLLATE NOCASE
+		ORDER BY lower(name) COLLATE NOCASE
 	`)
 	if err != nil {
 		return nil, err
@@ -61,7 +78,7 @@ func Names(database *sql.DB) ([]string, error) {
 		if err := rows.Scan(&name); err != nil {
 			return nil, err
 		}
-		names = append(names, name)
+		names = append(names, displayName(name))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -87,10 +104,23 @@ func queryMeasurements(database *sql.DB, query string, args ...any) ([]Measureme
 		); err != nil {
 			return nil, err
 		}
+		measurement.Name = displayName(measurement.Name)
 		measurements = append(measurements, measurement)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return measurements, nil
+}
+
+func normalizeName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func displayName(name string) string {
+	runes := []rune(normalizeName(name))
+	if len(runes) > 0 {
+		runes[0] = unicode.ToUpper(runes[0])
+	}
+	return string(runes)
 }

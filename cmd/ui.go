@@ -37,6 +37,7 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 		printMenuItem(output, "1", "Add measurement")
 		printMenuItem(output, "2", "View latest 10 measurements")
 		printMenuItem(output, "3", "View measurements by name")
+		printMenuItem(output, "m", "Manage measurements")
 		printMenuItem(output, "0", "Exit")
 		fmt.Fprintf(output, "\n  %s▸%s Choose an option: ", cyan, reset)
 
@@ -44,21 +45,16 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 			return scanner.Err()
 		}
 
-		choice, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
-		if err != nil {
-			fmt.Fprintf(output, "  %s✗ Please enter 1, 2, 3, or 0.%s\n", red, reset)
-			continue
-		}
-
+		choice := strings.ToLower(strings.TrimSpace(scanner.Text()))
 		switch choice {
-		case 1:
+		case "1":
 			if err := addMeasurement(scanner, output, database); err != nil {
 				if errors.Is(err, io.EOF) {
 					return nil
 				}
 				fmt.Fprintf(output, "  %s✗ Could not save measurement: %v%s\n", red, err, reset)
 			}
-		case 2:
+		case "2":
 			measurements, err := db.RecentMeasurements(database)
 			if err != nil {
 				fmt.Fprintf(output, "  %s✗ Could not load measurements: %v%s\n", red, err, reset)
@@ -71,18 +67,25 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 					return err
 				}
 			}
-		case 3:
+		case "3":
 			if err := viewMeasurementsByName(scanner, output, database); err != nil {
 				if errors.Is(err, io.EOF) {
 					return nil
 				}
 				fmt.Fprintf(output, "  %s✗ Could not load measurements: %v%s\n", red, err, reset)
 			}
-		case 0:
+		case "m":
+			if err := manageMeasurements(scanner, output, database); err != nil {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
+				fmt.Fprintf(output, "  %s✗ Could not manage measurements: %v%s\n", red, err, reset)
+			}
+		case "0":
 			fmt.Fprintf(output, "  %s✓ Goodbye.%s\n", green, reset)
 			return nil
 		default:
-			fmt.Fprintf(output, "  %s✗ Please enter 1, 2, 3, or 0.%s\n", red, reset)
+			fmt.Fprintf(output, "  %s✗ Please enter 1, 2, 3, m, or 0.%s\n", red, reset)
 		}
 	}
 }
@@ -166,7 +169,7 @@ func viewMeasurementsByName(scanner *bufio.Scanner, output io.Writer, database *
 		return err
 	}
 	if len(names) == 0 {
-		fmt.Fprintf(output, "  %sℹ No names found. Add a measurement first.%s\n", cyan, reset)
+		fmt.Fprintf(output, "  %s No names found. Add a measurement first.%s\n", cyan, reset)
 		return nil
 	}
 
@@ -204,6 +207,247 @@ func viewMeasurementsByName(scanner *bufio.Scanner, output io.Writer, database *
 		}
 		return nil
 	}
+}
+
+func manageMeasurements(scanner *bufio.Scanner, output io.Writer, database *sql.DB) error {
+	for {
+		fmt.Fprint(output, "\033[2J\033[H")
+		printBanner(output)
+		printSeparator(output)
+		fmt.Fprintf(output, "  %sMANAGE MEASUREMENTS%s\n\n", bold+white, reset)
+		printMenuItem(output, "u", "Update measurement")
+		printMenuItem(output, "d", "Delete measurement")
+		printMenuItem(output, "c", "Cancel")
+
+		choice, err := readLine(scanner, output, "Choose an option: ")
+		if err != nil {
+			return err
+		}
+		switch strings.ToLower(choice) {
+		case "u":
+			if err := updateMeasurement(scanner, output, database); err != nil {
+				return err
+			}
+		case "d":
+			if err := deleteMeasurement(scanner, output, database); err != nil {
+				return err
+			}
+		case "c":
+			return nil
+		default:
+			fmt.Fprintf(output, "  %s✗ Choose u, d, or c.%s\n", red, reset)
+			if _, err := waitForManagementContinue(scanner, output); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func updateMeasurement(scanner *bufio.Scanner, output io.Writer, database *sql.DB) error {
+	name, canceled, err := selectManagementName(scanner, output, database)
+	if err != nil || canceled {
+		return err
+	}
+
+	measurements, err := db.MeasurementsByName(database, name)
+	if err != nil {
+		return err
+	}
+	if len(measurements) == 0 {
+		return showManagementNotice(scanner, output, "No measurements found for "+name+".")
+	}
+
+	measurement, canceled, err := selectManagementMeasurement(scanner, output, measurements)
+	if err != nil || canceled {
+		return err
+	}
+
+	fmt.Fprint(output, "\033[2J\033[H")
+	fmt.Fprintf(output, "\n  %sUPDATE MEASUREMENT%s\n", bold+white, reset)
+	fmt.Fprintf(output, "  %sWeight:%s %.2f kg\n", bold, reset, measurement.Weight)
+	fmt.Fprintf(output, "  %sMeasured:%s %s\n\n", bold, reset, formatMeasurementTime(measurement.MeasuringTime))
+	for {
+		weightText, err := readLine(scanner, output, "New weight in kg (c to cancel): ")
+		if err != nil {
+			return err
+		}
+		if strings.EqualFold(weightText, "c") {
+			return nil
+		}
+		weight, err := strconv.ParseFloat(weightText, 64)
+		if err != nil || weight <= 0 {
+			fmt.Fprintf(output, "  %s✗ Enter a valid weight greater than zero.%s\n", red, reset)
+			continue
+		}
+		if err := db.UpdateMeasurementWeight(database, measurement.ID, weight); err != nil {
+			return err
+		}
+		return showManagementNotice(scanner, output, "Measurement weight updated.")
+	}
+}
+
+func deleteMeasurement(scanner *bufio.Scanner, output io.Writer, database *sql.DB) error {
+	name, canceled, err := selectManagementName(scanner, output, database)
+	if err != nil || canceled {
+		return err
+	}
+
+	deleteAll, canceled, err := chooseDeleteScope(scanner, output, name)
+	if err != nil || canceled {
+		return err
+	}
+	if deleteAll {
+		confirmed, err := confirmManagementAction(scanner, output, "Delete all measurements for "+name+"?")
+		if err != nil || !confirmed {
+			return err
+		}
+		if err := db.DeleteMeasurementsByName(database, name); err != nil {
+			return err
+		}
+		return showManagementNotice(scanner, output, "All measurements for "+name+" were deleted.")
+	}
+
+	measurements, err := db.MeasurementsByName(database, name)
+	if err != nil {
+		return err
+	}
+	if len(measurements) == 0 {
+		return showManagementNotice(scanner, output, "No measurements found for "+name+".")
+	}
+	measurement, canceled, err := selectManagementMeasurement(scanner, output, measurements)
+	if err != nil || canceled {
+		return err
+	}
+	confirmed, err := confirmManagementAction(
+		scanner,
+		output,
+		fmt.Sprintf("Delete the %.2f kg measurement from %s?", measurement.Weight, formatMeasurementTime(measurement.MeasuringTime)),
+	)
+	if err != nil || !confirmed {
+		return err
+	}
+	if err := db.DeleteMeasurement(database, measurement.ID); err != nil {
+		return err
+	}
+	return showManagementNotice(scanner, output, "Measurement deleted.")
+}
+
+func selectManagementName(scanner *bufio.Scanner, output io.Writer, database *sql.DB) (string, bool, error) {
+	names, err := db.Names(database)
+	if err != nil {
+		return "", false, err
+	}
+	if len(names) == 0 {
+		return "", true, showManagementNotice(scanner, output, "No measurements to manage.")
+	}
+
+	fmt.Fprint(output, "\033[2J\033[H")
+	fmt.Fprintf(output, "\n  %sCHOOSE A NAME%s\n", bold+white, reset)
+	for index, name := range names {
+		fmt.Fprintf(output, "  %s[%s%d%s]%s  %s\n", dim, reset+bold+cyan, index+1, reset+dim, reset, name)
+	}
+	fmt.Fprintf(output, "  %s[c]%s  Cancel\n", cyan, reset)
+	for {
+		choiceText, err := readLine(scanner, output, "Name number: ")
+		if err != nil {
+			return "", false, err
+		}
+		if strings.EqualFold(choiceText, "c") {
+			return "", true, nil
+		}
+		choice, err := strconv.Atoi(choiceText)
+		if err != nil || choice < 1 || choice > len(names) {
+			fmt.Fprintf(output, "  %s✗ Choose a number from the list or c to cancel.%s\n", red, reset)
+			continue
+		}
+		return names[choice-1], false, nil
+	}
+}
+
+func selectManagementMeasurement(scanner *bufio.Scanner, output io.Writer, measurements []db.Measurement) (db.Measurement, bool, error) {
+	fmt.Fprint(output, "\033[2J\033[H")
+	fmt.Fprintf(output, "\n  %sCHOOSE A MEASUREMENT%s\n", bold+white, reset)
+	for index, measurement := range measurements {
+		fmt.Fprintf(output, "  %s[%s%d%s]%s  %.2f kg  %s\n",
+			dim, reset+bold+cyan, index+1, reset+dim, reset,
+			measurement.Weight, formatMeasurementTime(measurement.MeasuringTime))
+	}
+	fmt.Fprintf(output, "  %s[c]%s  Cancel\n", cyan, reset)
+	for {
+		choiceText, err := readLine(scanner, output, "Measurement number: ")
+		if err != nil {
+			return db.Measurement{}, false, err
+		}
+		if strings.EqualFold(choiceText, "c") {
+			return db.Measurement{}, true, nil
+		}
+		choice, err := strconv.Atoi(choiceText)
+		if err != nil || choice < 1 || choice > len(measurements) {
+			fmt.Fprintf(output, "  %s✗ Choose a number from the list or c to cancel.%s\n", red, reset)
+			continue
+		}
+		return measurements[choice-1], false, nil
+	}
+}
+
+func chooseDeleteScope(scanner *bufio.Scanner, output io.Writer, name string) (bool, bool, error) {
+	fmt.Fprint(output, "\033[2J\033[H")
+	fmt.Fprintf(output, "\n  %sDELETE MEASUREMENTS FOR %s%s\n", bold+white, name, reset)
+	fmt.Fprintf(output, "  %s[a]%s  Delete all measurements for this name\n", cyan, reset)
+	fmt.Fprintf(output, "  %s[m]%s  Delete one measurement\n", cyan, reset)
+	fmt.Fprintf(output, "  %s[c]%s  Cancel\n", cyan, reset)
+	for {
+		choice, err := readLine(scanner, output, "Choose an option: ")
+		if err != nil {
+			return false, false, err
+		}
+		switch strings.ToLower(choice) {
+		case "a":
+			return true, false, nil
+		case "m":
+			return false, false, nil
+		case "c":
+			return false, true, nil
+		default:
+			fmt.Fprintf(output, "  %s✗ Choose a, m, or c.%s\n", red, reset)
+		}
+	}
+}
+
+func confirmManagementAction(scanner *bufio.Scanner, output io.Writer, prompt string) (bool, error) {
+	fmt.Fprint(output, "\033[2J\033[H")
+	fmt.Fprintf(output, "\n  %s%s%s\n", bold+white, prompt, reset)
+	fmt.Fprintf(output, "  %s[y]%s  Confirm\n", cyan, reset)
+	fmt.Fprintf(output, "  %s[c]%s  Cancel\n", cyan, reset)
+	for {
+		choice, err := readLine(scanner, output, "Choose an option: ")
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(choice) {
+		case "y":
+			return true, nil
+		case "c":
+			return false, nil
+		default:
+			fmt.Fprintf(output, "  %s✗ Choose y or c.%s\n", red, reset)
+		}
+	}
+}
+
+func showManagementNotice(scanner *bufio.Scanner, output io.Writer, message string) error {
+	fmt.Fprint(output, "\033[2J\033[H")
+	fmt.Fprintf(output, "\n  %s%s%s\n", cyan, message, reset)
+	_, err := waitForManagementContinue(scanner, output)
+	return err
+}
+
+func waitForManagementContinue(scanner *bufio.Scanner, output io.Writer) (bool, error) {
+	choice, err := readLine(scanner, output, "Press Enter or c to return: ")
+	if err != nil {
+		return false, err
+	}
+	return strings.EqualFold(choice, "c"), nil
 }
 
 func renderMeasurements(output io.Writer, title string, measurements []db.Measurement) {
