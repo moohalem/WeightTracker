@@ -18,6 +18,7 @@ func MainMenu(database *sql.DB, input io.Reader, output io.Writer) error {
 	scanner := bufio.NewScanner(input)
 
 	for {
+		fmt.Fprint(output, "\033[2J\033[H")
 		fmt.Fprintln(output, "\nWEIGHT TRACKER")
 		fmt.Fprintln(output, "==============")
 		fmt.Fprintln(output, "1. Add measurement")
